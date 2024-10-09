@@ -128,6 +128,7 @@ const Dashboard: React.FC = () => {
         minMargin={minMargin}
       />
     </div>
+    
   );
 };
 
