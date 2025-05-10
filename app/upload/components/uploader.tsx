@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { CloudUpload, File, ArrowLeft } from "lucide-react";
-import CustomAlertDialog from "./alertDialog";
+import { CloudUpload, File, ArrowLeft, Link } from "lucide-react";
+import CustomAlertDialog from "./alert-dialog";
 import UploadProgress from "./progress";
-import useMultiWinnerDataStore from "../../../store/MultiWinnerData";
-import { explainAssertions } from "../../explain-assertions/components/explain_process";
+import useMultiWinnerDataStore from "../../../store/multi-winner-data";
+import { validateInputData } from "../../explain-assertions/components/explain-process";
 import { useRouter } from "next/navigation";
-import { AvatarColor } from "@/utils/avatarColor";
+import { useFileDataStore } from "@/store/fileData";
+import { getContentFromAssertion } from "@/utils/candidateTools";
 
 interface UploaderProps {
   className?: string;
@@ -30,6 +31,12 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
   const maxFileSize = 100 * 1024 * 1024; // 100MB
   const router = useRouter();
 
+  const startGuide = () => {
+    // 标识引导状态（仅在本次 session 中有效）
+    sessionStorage.setItem("startTour", "true");
+    router.push("/dashboard");
+  };
+
   const {
     setMultiWinner,
     clearMultiWinner,
@@ -37,9 +44,9 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
     clearCandidateList,
     setAssertionList,
     clearAssertionList,
+    setWinnerInfo,
+    clearWinnerInfo,
   } = useMultiWinnerDataStore(); // 使用全局状态
-
-  const avatarColor = new AvatarColor();
 
   const simulateProgress = useCallback(
     (state: number, success: boolean, errorMsg: string) => {
@@ -127,34 +134,25 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
         const result = e.target?.result;
 
         if (typeof result === "string") {
+          // 存储内容
+          useFileDataStore.setState({ fileData: result });
+
           // 调用核心库中的 explainAssertions 函数进行解析和校验
-          const response = explainAssertions(result); // 直接将文件内容传递给核心库
+          // const response = explainAssertions(result); // 直接将文件内容传递给核心库
+          const response = validateInputData(result);
           // 根据核心库返回的 response 进行处理
           if (response.success) {
             // 成功解析并校验，将数据存储到全局状态中
-            setMultiWinner(response.data);
+            // setMultiWinner(response.data);
             const jsonData = JSON.parse(result);
             const candidateList = jsonData.metadata.candidates.map(
               (name: string, index: number) => ({
                 id: index,
                 name: name,
-                color: avatarColor.getColor(index),
               }),
             );
 
             setCandidateList(candidateList);
-
-            // 将候选人列表转换为字典，以便更快地查找名字
-            const candidateMap = candidateList.reduce(
-              (
-                acc: { [key: number]: string },
-                candidate: { id: number; name: string; color: string },
-              ) => {
-                acc[candidate.id] = candidate.name;
-                return acc;
-              },
-              {} as { [key: number]: string },
-            );
 
             // 从 jsonData 中提取 assertions
             const assertions = jsonData.solution.Ok.assertions;
@@ -175,28 +173,16 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
                 index: number,
               ) => {
                 const { assertion, difficulty, margin } = assertionObj;
-                const { type, winner, loser, continuing } = assertion;
-
-                // 获取 winner 和 loser 的名字
-                const winnerName = candidateMap[winner];
-                const loserName = candidateMap[loser];
-
-                // 根据不同类型生成 content 字段
-                let content = "";
-                if (type === "NEN") {
-                  const continuingNames = continuing
-                    .map((id) => candidateMap[id])
-                    .join(", ");
-                  content = `${winnerName} > ${loserName} if only {${continuingNames}} remain`;
-                } else if (type === "NEB") {
-                  content = `${winnerName} NEB ${loserName}`;
-                }
+                const { type, winner } = assertion;
 
                 // 返回 assertionList 的每一项
                 return {
                   index: index + 1, // index 从 1 开始
                   winner: winner, // 将 winner 转化为名字
-                  content, // 生成的内容
+                  content: getContentFromAssertion({
+                    assertion,
+                    candidateList,
+                  }), // 生成的内容
                   type, // 保持 type 不变
                   difficulty, // 保持 difficulty 不变
                   margin, // 保持 margin 不变
@@ -204,6 +190,10 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
               },
             );
             setAssertionList(assertionList);
+
+            const winnerId = jsonData.solution.Ok.winner;
+            const winnerName = jsonData.metadata.candidates[winnerId];
+            setWinnerInfo({ id: winnerId, name: winnerName });
 
             // 根据返回的 state 模拟进度条
             simulateProgress(response.state, true, "");
@@ -239,6 +229,7 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
         return;
       }
       setSelectedFile(file);
+      clearWinnerInfo();
       clearMultiWinner(); // 清空全局状态中的 JSON 数据
       clearCandidateList(); // 清空全局状态中的候选人列表
       clearAssertionList(); // 清空全局状态中的断言列表
@@ -288,6 +279,10 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
     }
   };
 
+  const handleBrowseClick = () => {
+    document.getElementById("file-input")?.click(); // 触发文件上传的点击事件
+  };
+
   const handleReset = () => {
     setSelectedFile(null); // 清空选中的文件
     clearMultiWinner(); // 清空全局状态中的 JSON 数据
@@ -317,7 +312,7 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
       ) : uploadComplete && selectedFile ? (
         <>
           {/* 上传完成 */}
-          <div className="border-2 border-gray-300 p-8 rounded-lg bg-gray-50 cursor-pointer w-full relative text-center flex flex-grow justify-center items-center">
+          <div className="border-2 border-gray-300 p-8 rounded-lg bg-muted cursor-pointer w-full relative text-center flex flex-grow justify-center items-center">
             <div>
               <h2 className="text-2xl font-bold text-gray-600 mb-2">
                 Uploaded!
@@ -329,13 +324,22 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
               <p className="text-sm text-gray-500">
                 Your file has been added successfully!
               </p>
-              <button
-                type="button"
-                onClick={() => router.push("/dashboard")} // 跳转到解析页面
-                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-500 transition"
-              >
-                Start Explaining
-              </button>
+              <div className="mt-4 flex justify-center gap-4">
+                <button
+                  type="button"
+                  onClick={startGuide}
+                  className="w-40 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-500 transition"
+                >
+                  Start Guide
+                </button>
+                <button
+                  type="button"
+                  onClick={() => router.push("/dashboard")}
+                  className="w-40 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-500 transition"
+                >
+                  Start Explaining
+                </button>
+              </div>
               <div className="mt-4">
                 <button
                   onClick={handleReset}
@@ -356,7 +360,7 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
             Use the dropzone below to upload your file.
           </p>
           <div
-            className="border-2 border-gray-300 p-8 rounded-lg bg-gray-50 cursor-pointer w-full relative text-center flex flex-grow justify-center items-center"
+            className="border-2 border-gray-300 p-8 rounded-lg bg-muted cursor-pointer w-full relative text-center flex flex-grow justify-center items-center"
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
@@ -365,19 +369,28 @@ const Uploader: React.FC<UploaderProps> = ({ className }) => {
               {/* 设置 CloudUpload 图标大小 */}
               <p className="text-gray-600">
                 Drag or{" "}
-                <span className="text-blue-600 cursor-pointer">Browse</span>{" "}
+                <span
+                  className="text-blue-600 cursor-pointer hover:underline"
+                  onClick={handleBrowseClick}
+                >
+                  Browse
+                </span>{" "}
                 your files
               </p>
               <p className="text-gray-400 mb-2">or</p>
-              {/* Sample文件 TODO */}
-              <a href="#" className="text-blue-600">
+              <button
+                onClick={() => router.push("/sample")} // 跳转到Sample页面
+                className="text-blue-600 hover:underline"
+              >
                 Use a sample file
-              </a>
+              </button>
               <input
+                id="file-input"
                 type="file"
                 accept="application/json, text/plain"
                 onChange={handleFileChange}
                 className="top-0 left-0 w-full h-full opacity-0 cursor-pointer absolute"
+                style={{ display: "none" }} // 隐藏上传文件的输入框
               />
               <p className="text-sm text-gray-400 mt-4 absolute bottom-2 left-2">
                 Supported files: .json, .txt | Upload limit: 100MB
